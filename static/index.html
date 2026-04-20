@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kanban</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header>
+    <span class="logo">Kanban</span>
+    <div class="sprint-controls">
+      <select id="sprint-select"><option value="">— select sprint —</option></select>
+      <button id="btn-new-sprint">+ Sprint</button>
+      <button id="btn-rename-sprint" class="secondary" disabled>Rename</button>
+      <button id="btn-delete-sprint" class="danger" disabled>Delete Sprint</button>
+    </div>
+    <button id="btn-add-card" disabled>+ Card</button>
+  </header>
+
+  <main id="board">
+    <div class="empty-state">Select or create a sprint to get started.</div>
+  </main>
+
+  <!-- Card modal -->
+  <div id="card-overlay" class="overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="card-modal-title">Card</h2>
+        <button class="icon-btn" id="card-modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Title</label>
+          <input type="text" id="card-title" placeholder="What needs to be done?">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Status</label>
+            <select id="card-status">
+              <option>Not Triaged</option>
+              <option>Backlog</option>
+              <option>In Progress</option>
+              <option>Needs Review</option>
+              <option>Ready Playback</option>
+              <option>Done</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Priority</label>
+            <select id="card-priority">
+              <option>Low</option>
+              <option selected>Medium</option>
+              <option>High</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="card-description" rows="3" placeholder="Add details, links, notes…"></textarea>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <textarea id="card-notes" rows="3" placeholder="Status updates, blockers, follow-ups…"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Created on</label>
+            <input type="text" id="card-created-at" disabled>
+          </div>
+          <div class="form-group">
+            <label>Due on</label>
+            <input type="date" id="card-due-on">
+          </div>
+          <div class="form-group">
+            <label>Delivered on</label>
+            <input type="date" id="card-delivered-on">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="danger" id="card-delete" style="visibility:hidden">Delete</button>
+        <div class="modal-footer-right">
+          <button class="secondary" id="card-cancel">Cancel</button>
+          <button id="card-save">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sprint name modal -->
+  <div id="sprint-overlay" class="overlay hidden">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2 id="sprint-modal-title">New Sprint</h2>
+        <button class="icon-btn" id="sprint-modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Sprint Name</label>
+          <input type="text" id="sprint-name-input" placeholder="e.g. Sprint 12">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <div></div>
+        <div class="modal-footer-right">
+          <button class="secondary" id="sprint-cancel">Cancel</button>
+          <button id="sprint-save">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
