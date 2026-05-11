@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 DB_PATH = os.path.join(os.path.dirname(__file__), 'kanban.db')
 STATIC_DIR = os.path.join(os.path.dirname(__file__), 'static')
 
-STATUSES = ['Not Triaged', 'Backlog', 'In Progress', 'Needs Review', 'Ready Playback', 'Done']
+STATUSES = ['Not Triaged', 'Backlog', 'Blocked', 'In Progress', 'Needs Review', 'Ready Playback', 'On Standby', 'Done']
 
 
 def get_db():
@@ -99,6 +99,10 @@ class KanbanHandler(http.server.BaseHTTPRequestHandler):
             self.handle_get_sprints()
         elif m := re.match(r'^/api/sprints/(\d+)/cards$', path):
             self.handle_get_cards(int(m.group(1)))
+        elif m := re.match(r'^/api/sprints/(\d+)/dependencies$', path):
+            self.handle_get_dependencies(int(m.group(1)))
+        elif m := re.match(r'^/api/cards/(\d+)/dependencies$', path):
+            self.handle_get_card_dependencies(int(m.group(1)))
         else:
             self.serve_static(path)
 
@@ -108,6 +112,8 @@ class KanbanHandler(http.server.BaseHTTPRequestHandler):
             self.handle_create_sprint()
         elif m := re.match(r'^/api/sprints/(\d+)/cards$', path):
             self.handle_create_card(int(m.group(1)))
+        elif path == '/api/dependencies':
+            self.handle_create_dependency()
         else:
             self.send_json({'error': 'Not found'}, 404)
 
@@ -126,6 +132,8 @@ class KanbanHandler(http.server.BaseHTTPRequestHandler):
             self.handle_delete_sprint(int(m.group(1)))
         elif m := re.match(r'^/api/cards/(\d+)$', path):
             self.handle_delete_card(int(m.group(1)))
+        elif m := re.match(r'^/api/dependencies/(\d+)/(\d+)$', path):
+            self.handle_delete_dependency(int(m.group(1)), int(m.group(2)))
         else:
             self.send_json({'error': 'Not found'}, 404)
 
@@ -169,6 +177,83 @@ class KanbanHandler(http.server.BaseHTTPRequestHandler):
         conn.commit()
         conn.close()
         self.send_json({'ok': True})
+
+    def _has_path(self, conn, from_id, to_id):
+        """BFS: does a dependency path already exist from from_id to to_id?"""
+        visited, queue = set(), [from_id]
+        while queue:
+            node = queue.pop(0)
+            if node == to_id:
+                return True
+            if node in visited:
+                continue
+            visited.add(node)
+            rows = conn.execute(
+                'SELECT depends_on FROM card_dependencies WHERE card_id=?', (node,)
+            ).fetchall()
+            queue.extend(r[0] for r in rows)
+        return False
+
+    def handle_create_dependency(self):
+        data = self.read_json()
+        card_id   = data.get('card_id')
+        depends_on = data.get('depends_on')
+        if not card_id or not depends_on:
+            self.send_json({'error': 'card_id and depends_on required'}, 400)
+            return
+        if card_id == depends_on:
+            self.send_json({'error': 'A card cannot depend on itself'}, 400)
+            return
+        conn = get_db()
+        # cycle check: would adding (card_id → depends_on) create a cycle?
+        # a cycle exists if depends_on already (transitively) depends on card_id
+        if self._has_path(conn, depends_on, card_id):
+            conn.close()
+            self.send_json({'error': 'This dependency would create a cycle'}, 409)
+            return
+        conn.execute(
+            'INSERT OR IGNORE INTO card_dependencies (card_id, depends_on) VALUES (?,?)',
+            (card_id, depends_on)
+        )
+        conn.commit()
+        conn.close()
+        self.send_json({'ok': True}, 201)
+
+    def handle_delete_dependency(self, card_id, depends_on):
+        conn = get_db()
+        conn.execute(
+            'DELETE FROM card_dependencies WHERE card_id=? AND depends_on=?',
+            (card_id, depends_on)
+        )
+        conn.commit()
+        conn.close()
+        self.send_json({'ok': True})
+
+    def handle_get_card_dependencies(self, card_id):
+        conn = get_db()
+        predecessors = [dict(r) for r in conn.execute('''
+            SELECT c.id, c.title FROM card_dependencies d
+            JOIN cards c ON c.id = d.depends_on
+            WHERE d.card_id = ?
+        ''', (card_id,))]
+        successors = [dict(r) for r in conn.execute('''
+            SELECT c.id, c.title FROM card_dependencies d
+            JOIN cards c ON c.id = d.card_id
+            WHERE d.depends_on = ?
+        ''', (card_id,))]
+        conn.close()
+        self.send_json({'predecessors': predecessors, 'successors': successors})
+
+    def handle_get_dependencies(self, sprint_id):
+        conn = get_db()
+        rows = [dict(r) for r in conn.execute('''
+            SELECT d.card_id, d.depends_on
+            FROM card_dependencies d
+            JOIN cards c ON c.id = d.card_id
+            WHERE c.sprint_id = ?
+        ''', (sprint_id,))]
+        conn.close()
+        self.send_json(rows)
 
     # --- Card handlers ---
 
