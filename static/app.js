@@ -29,6 +29,9 @@ const state = {
   sprintModalMode: null,
 };
 
+// Ephemeral set of card IDs hidden from the Gantt chart; resets on page reload
+const ganttHiddenCards = new Set();
+
 // ── API ──────────────────────────────────────────────────────────────────────
 
 async function api(method, path, body) {
@@ -97,16 +100,23 @@ async function selectSprint(id) {
 // ── Cards ─────────────────────────────────────────────────────────────────────
 
 async function createCard(data) {
-  const card = await api('POST', `/api/sprints/${state.currentSprintId}/cards`, data);
-  state.cards.push(card);
-  renderBoard();
+  const sprintId = data.sprint_id ?? state.currentSprintId;
+  const card = await api('POST', `/api/sprints/${sprintId}/cards`, data);
+  if (card.sprint_id === state.currentSprintId) state.cards.push(card);
+  if (state.view === 'kanban') renderBoard();
+  else renderGantt();
 }
 
 async function updateCard(id, data) {
   const card = await api('PUT', `/api/cards/${id}`, data);
   const idx = state.cards.findIndex(c => c.id === id);
-  if (idx !== -1) state.cards[idx] = card;
-  renderBoard();
+  if (card.sprint_id !== state.currentSprintId) {
+    if (idx !== -1) state.cards.splice(idx, 1);
+  } else {
+    if (idx !== -1) state.cards[idx] = card;
+  }
+  if (state.view === 'kanban') renderBoard();
+  else renderGantt();
 }
 
 async function deleteCard(id) {
@@ -225,6 +235,17 @@ async function openCardModal(card) {
   document.getElementById('card-due-on').value = card?.due_on ?? '';
   document.getElementById('card-delivered-on').value = card?.delivered_on ?? '';
 
+  const sprintSel = document.getElementById('card-sprint');
+  sprintSel.innerHTML = '';
+  const cardSprintId = card?.sprint_id ?? state.currentSprintId;
+  state.sprints.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.name;
+    if (s.id === cardSprintId) opt.selected = true;
+    sprintSel.appendChild(opt);
+  });
+
   const deleteBtn = document.getElementById('card-delete');
   deleteBtn.style.visibility = card ? 'visible' : 'hidden';
 
@@ -306,6 +327,7 @@ function closeCardModal() {
 async function saveCard() {
   const title = document.getElementById('card-title').value.trim();
   if (!title) { document.getElementById('card-title').focus(); return; }
+  const selectedSprintId = parseInt(document.getElementById('card-sprint').value) || state.currentSprintId;
   const data = {
     title,
     description: document.getElementById('card-description').value,
@@ -314,6 +336,7 @@ async function saveCard() {
     notes: document.getElementById('card-notes').value,
     due_on: document.getElementById('card-due-on').value || null,
     delivered_on: document.getElementById('card-delivered-on').value || null,
+    sprint_id: selectedSprintId,
   };
   if (state.editingCardId) {
     await updateCard(state.editingCardId, data);
@@ -536,8 +559,10 @@ function renderGantt() {
   let labelsHtml = `<div class="g-labels-inner">`;
   for (const card of sorted) {
     const color = STATUS_COLOR[card.status] || '#9ca3af';
+    const hidden = ganttHiddenCards.has(card.id);
     labelsHtml += `
-      <div class="g-label" data-card-id="${card.id}" style="height:${ROW_H}px">
+      <div class="g-label${hidden ? ' g-label-hidden' : ''}" data-card-id="${card.id}" style="height:${ROW_H}px">
+        <input type="checkbox" class="g-vis-check" ${hidden ? '' : 'checked'} data-card-id="${card.id}" title="Show in Gantt">
         <span class="g-label-title" title="${esc(card.title)}">${esc(card.title)}</span>
         <span class="g-label-badge" style="background:${color}">${esc(card.status)}</span>
       </div>`;
@@ -545,11 +570,22 @@ function renderGantt() {
   labelsHtml += '</div>';
   gLabels.innerHTML = labelsHtml;
 
-  // click labels to open card modal
+  // click labels to open card modal (ignore clicks on the checkbox itself)
   gLabels.querySelectorAll('.g-label').forEach(el => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', e => {
+      if (e.target.classList.contains('g-vis-check')) return;
       const card = state.cards.find(c => c.id === parseInt(el.dataset.cardId));
       if (card) openCardModal(card);
+    });
+  });
+
+  // checkbox toggles Gantt pill visibility (ephemeral -- resets on page reload)
+  gLabels.querySelectorAll('.g-vis-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const id = parseInt(cb.dataset.cardId);
+      if (cb.checked) ganttHiddenCards.delete(id);
+      else ganttHiddenCards.add(id);
+      renderGantt();
     });
   });
 
@@ -597,9 +633,9 @@ function renderGantt() {
       </marker>
     </defs>`;
 
-  // Pills
+  // Pills (skip cards hidden via sidebar checkboxes)
   for (const card of sorted) {
-    if (!card.due_on) continue;
+    if (!card.due_on || ganttHiddenCards.has(card.id)) continue;
     const row  = rowIndex.get(card.id);
     const col  = dayIndex(card.due_on, start);
     const cx   = col * DAY_W + DAY_W / 2;

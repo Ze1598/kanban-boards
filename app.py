@@ -316,9 +316,14 @@ class KanbanHandler(http.server.BaseHTTPRequestHandler):
         due_on = data.get('due_on', existing['due_on']) or None
         delivered_on = data.get('delivered_on', existing['delivered_on']) or None
         notes = data.get('notes', existing['notes'])
+        sprint_id = existing['sprint_id']
+        if 'sprint_id' in data:
+            new_sprint_id = int(data['sprint_id'])
+            if conn.execute('SELECT 1 FROM sprints WHERE id=?', (new_sprint_id,)).fetchone():
+                sprint_id = new_sprint_id
         conn.execute(
-            'UPDATE cards SET title=?, description=?, status=?, priority=?, position=?, due_on=?, delivered_on=?, notes=? WHERE id=?',
-            (title, description, status, priority, position, due_on, delivered_on, notes, card_id)
+            'UPDATE cards SET title=?, description=?, status=?, priority=?, position=?, due_on=?, delivered_on=?, notes=?, sprint_id=? WHERE id=?',
+            (title, description, status, priority, position, due_on, delivered_on, notes, sprint_id, card_id)
         )
         conn.commit()
         row = dict(conn.execute('SELECT * FROM cards WHERE id = ?', (card_id,)).fetchone())
