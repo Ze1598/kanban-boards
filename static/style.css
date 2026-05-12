@@ -216,6 +216,29 @@ button.icon-btn  { background: none; color: var(--text-muted); padding: 4px 8px;
   word-break: break-word;
 }
 
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.gantt-check {
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  margin: 0;
+  flex-shrink: 0;
+  opacity: 0.45;
+  transition: opacity 0.15s;
+}
+.card:hover .gantt-check,
+.gantt-check:not(:checked) {
+  opacity: 1;
+}
+
 .pri-dot {
   width: 8px;
   height: 8px;
@@ -460,23 +483,6 @@ button.icon-btn  { background: none; color: var(--text-muted); padding: 4px 8px;
   margin: auto;
   color: var(--text-muted);
   font-size: 0.95rem;
-}
-
-/* ── Gantt visibility checkbox ── */
-.g-vis-check {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  cursor: pointer;
-  accent-color: var(--accent);
-  margin: 0;
-}
-
-.g-label-hidden {
-  opacity: 0.38;
-}
-.g-label-hidden .g-label-badge {
-  filter: grayscale(0.6);
 }
 
 /* ── Modal dependency list ── */

@@ -192,9 +192,13 @@ function buildCard(card) {
   el.className = 'card';
   el.draggable = true;
   el.dataset.id = card.id;
+  const ganttVisible = !ganttHiddenCards.has(card.id);
   el.innerHTML = `
     <span class="card-title">${esc(card.title)}</span>
-    <span class="pri-dot ${card.priority}" title="${card.priority} priority"></span>
+    <div class="card-meta">
+      <input type="checkbox" class="gantt-check" ${ganttVisible ? 'checked' : ''} title="Show in Gantt">
+      <span class="pri-dot ${card.priority}" title="${card.priority} priority"></span>
+    </div>
   `;
 
   el.addEventListener('dragstart', e => {
@@ -203,6 +207,15 @@ function buildCard(card) {
   });
   el.addEventListener('dragend', () => el.classList.remove('dragging'));
   el.addEventListener('click', () => openCardModal(card));
+
+  const check = el.querySelector('.gantt-check');
+  check.addEventListener('click', e => e.stopPropagation());
+  check.addEventListener('change', () => {
+    if (check.checked) ganttHiddenCards.delete(card.id);
+    else ganttHiddenCards.add(card.id);
+    if (state.view === 'gantt') renderGantt();
+  });
+
   return el;
 }
 
@@ -528,16 +541,21 @@ function trunc(str, n) {
 function renderGantt() {
   if (!state.currentSprintId) return;
 
-  const sorted    = topoSort(state.cards, state.deps);
-  const scheduled = sorted.filter(c => c.due_on);
-  const floating  = sorted.filter(c => !c.due_on);
+  const sorted  = topoSort(state.cards, state.deps);
+  const visible = sorted.filter(c => !ganttHiddenCards.has(c.id));
   const { start, totalDays } = ganttDateRange(state.cards);
-  const todayMs   = today().getTime();
+  const todayMs = today().getTime();
 
   const totalW = totalDays * DAY_W;
-  const schedH = sorted.length * ROW_H;  // all rows same height in label/body
+  const schedH = visible.length * ROW_H;
 
-  // ── Date header ────────────────────────────────────────────────────────────
+  const isEmpty = !visible.some(c => c.due_on);
+  document.getElementById('gantt-empty').classList.toggle('hidden', !isEmpty);
+  document.querySelector('.g-wrap').style.display = isEmpty ? 'none' : 'grid';
+
+  if (isEmpty) return;
+
+  // Date header
   const gHead = document.getElementById('g-head');
   let headHtml = `<div class="g-head-inner" style="width:${totalW}px">`;
   for (let i = 0; i < totalDays; i++) {
@@ -554,15 +572,13 @@ function renderGantt() {
   headHtml += '</div>';
   gHead.innerHTML = headHtml;
 
-  // ── Label sidebar ──────────────────────────────────────────────────────────
+  // Label sidebar (simple — Gantt visibility is controlled from the Kanban checkboxes)
   const gLabels = document.getElementById('g-labels');
   let labelsHtml = `<div class="g-labels-inner">`;
-  for (const card of sorted) {
+  for (const card of visible) {
     const color = STATUS_COLOR[card.status] || '#9ca3af';
-    const hidden = ganttHiddenCards.has(card.id);
     labelsHtml += `
-      <div class="g-label${hidden ? ' g-label-hidden' : ''}" data-card-id="${card.id}" style="height:${ROW_H}px">
-        <input type="checkbox" class="g-vis-check" ${hidden ? '' : 'checked'} data-card-id="${card.id}" title="Show in Gantt">
+      <div class="g-label" data-card-id="${card.id}" style="height:${ROW_H}px">
         <span class="g-label-title" title="${esc(card.title)}">${esc(card.title)}</span>
         <span class="g-label-badge" style="background:${color}">${esc(card.status)}</span>
       </div>`;
@@ -570,22 +586,10 @@ function renderGantt() {
   labelsHtml += '</div>';
   gLabels.innerHTML = labelsHtml;
 
-  // click labels to open card modal (ignore clicks on the checkbox itself)
   gLabels.querySelectorAll('.g-label').forEach(el => {
-    el.addEventListener('click', e => {
-      if (e.target.classList.contains('g-vis-check')) return;
+    el.addEventListener('click', () => {
       const card = state.cards.find(c => c.id === parseInt(el.dataset.cardId));
       if (card) openCardModal(card);
-    });
-  });
-
-  // checkbox toggles Gantt pill visibility (ephemeral -- resets on page reload)
-  gLabels.querySelectorAll('.g-vis-check').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const id = parseInt(cb.dataset.cardId);
-      if (cb.checked) ganttHiddenCards.delete(id);
-      else ganttHiddenCards.add(id);
-      renderGantt();
     });
   });
 
@@ -606,7 +610,7 @@ function renderGantt() {
   }
 
   // row backgrounds
-  for (let i = 0; i < sorted.length; i++) {
+  for (let i = 0; i < visible.length; i++) {
     rowsHtml += `<div class="g-row" style="position:absolute; top:${i * ROW_H}px; left:0; right:0; height:${ROW_H}px"></div>`;
   }
   rowsHtml += '</div>';
@@ -622,8 +626,8 @@ function renderGantt() {
   // Map card id → {row, colX} for arrow routing
   const pillPos = new Map(); // card.id → { cx, cy, left, right }
 
-  // Build sorted-index map
-  const rowIndex = new Map(sorted.map((c, i) => [c.id, i]));
+  // Build row-index map from visible cards only
+  const rowIndex = new Map(visible.map((c, i) => [c.id, i]));
 
   let svgContent = `
     <defs>
@@ -633,9 +637,9 @@ function renderGantt() {
       </marker>
     </defs>`;
 
-  // Pills (skip cards hidden via sidebar checkboxes)
-  for (const card of sorted) {
-    if (!card.due_on || ganttHiddenCards.has(card.id)) continue;
+  // Pills — only for visible cards that have a due date
+  for (const card of visible) {
+    if (!card.due_on) continue;
     const row  = rowIndex.get(card.id);
     const col  = dayIndex(card.due_on, start);
     const cx   = col * DAY_W + DAY_W / 2;
