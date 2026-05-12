@@ -225,6 +225,7 @@ button.icon-btn  { background: none; color: var(--text-muted); padding: 4px 8px;
 }
 
 .gantt-check {
+  display: none;
   width: 13px;
   height: 13px;
   cursor: pointer;
@@ -234,8 +235,9 @@ button.icon-btn  { background: none; color: var(--text-muted); padding: 4px 8px;
   opacity: 0.45;
   transition: opacity 0.15s;
 }
-.card:hover .gantt-check,
-.gantt-check:not(:checked) {
+body.gantt-active .gantt-check { display: block; }
+body.gantt-active .card:hover .gantt-check,
+body.gantt-active .gantt-check:not(:checked) {
   opacity: 1;
 }
 

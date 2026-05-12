@@ -448,6 +448,7 @@ async function deleteDependency(cardId, dependsOn) {
 function switchView(v) {
   state.view = v;
   const isGantt = v === 'gantt';
+  document.body.classList.toggle('gantt-active', isGantt);
   document.getElementById('board').classList.toggle('hidden', isGantt);
   document.getElementById('gantt').classList.toggle('hidden', !isGantt);
   document.getElementById('btn-toggle-view').textContent = isGantt ? 'Board' : 'Gantt';
