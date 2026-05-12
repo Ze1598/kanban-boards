@@ -462,6 +462,23 @@ button.icon-btn  { background: none; color: var(--text-muted); padding: 4px 8px;
   font-size: 0.95rem;
 }
 
+/* ── Gantt visibility checkbox ── */
+.g-vis-check {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.g-label-hidden {
+  opacity: 0.38;
+}
+.g-label-hidden .g-label-badge {
+  filter: grayscale(0.6);
+}
+
 /* ── Modal dependency list ── */
 #card-deps-section { display: none; }
 
