@@ -11,6 +11,24 @@ DB_PATH = os.path.join(os.path.dirname(__file__), 'kanban.db')
 STATIC_DIR = os.path.join(os.path.dirname(__file__), 'static')
 
 STATUSES = ['Not Triaged', 'Backlog', 'Blocked', 'In Progress', 'Needs Review', 'Ready Playback', 'On Standby', 'Done']
+BULK_MAX = 50
+
+
+def has_path(conn, from_id, to_id):
+    """BFS: does a dependency path already exist from from_id to to_id?"""
+    visited, queue = set(), [from_id]
+    while queue:
+        node = queue.pop(0)
+        if node == to_id:
+            return True
+        if node in visited:
+            continue
+        visited.add(node)
+        rows = conn.execute(
+            'SELECT depends_on FROM card_dependencies WHERE card_id=?', (node,)
+        ).fetchall()
+        queue.extend(r[0] for r in rows)
+    return False
 
 
 def get_db():
@@ -114,6 +132,17 @@ class KanbanHandler(http.server.BaseHTTPRequestHandler):
             self.handle_create_card(int(m.group(1)))
         elif path == '/api/dependencies':
             self.handle_create_dependency()
+        elif path == '/api/cards/bulk-move':
+            self.handle_bulk_move_cards()
+        elif path == '/api/dependencies/bulk':
+            self.handle_bulk_create_dependencies()
+        else:
+            self.send_json({'error': 'Not found'}, 404)
+
+    def do_PATCH(self):
+        path = urlparse(self.path).path
+        if path == '/api/cards/bulk':
+            self.handle_bulk_update_cards()
         else:
             self.send_json({'error': 'Not found'}, 404)
 
@@ -178,22 +207,6 @@ class KanbanHandler(http.server.BaseHTTPRequestHandler):
         conn.close()
         self.send_json({'ok': True})
 
-    def _has_path(self, conn, from_id, to_id):
-        """BFS: does a dependency path already exist from from_id to to_id?"""
-        visited, queue = set(), [from_id]
-        while queue:
-            node = queue.pop(0)
-            if node == to_id:
-                return True
-            if node in visited:
-                continue
-            visited.add(node)
-            rows = conn.execute(
-                'SELECT depends_on FROM card_dependencies WHERE card_id=?', (node,)
-            ).fetchall()
-            queue.extend(r[0] for r in rows)
-        return False
-
     def handle_create_dependency(self):
         data = self.read_json()
         card_id   = data.get('card_id')
@@ -207,7 +220,7 @@ class KanbanHandler(http.server.BaseHTTPRequestHandler):
         conn = get_db()
         # cycle check: would adding (card_id → depends_on) create a cycle?
         # a cycle exists if depends_on already (transitively) depends on card_id
-        if self._has_path(conn, depends_on, card_id):
+        if has_path(conn, depends_on, card_id):
             conn.close()
             self.send_json({'error': 'This dependency would create a cycle'}, 409)
             return
@@ -336,6 +349,116 @@ class KanbanHandler(http.server.BaseHTTPRequestHandler):
         conn.commit()
         conn.close()
         self.send_json({'ok': True})
+
+    # --- Bulk handlers ---
+
+    def handle_bulk_update_cards(self):
+        data = self.read_json()
+        if not isinstance(data, list):
+            self.send_json({'error': 'Expected a JSON array'}, 400)
+            return
+        if len(data) > BULK_MAX:
+            self.send_json({'error': f'Too many items, max {BULK_MAX}'}, 413)
+            return
+        conn = get_db()
+        updated, errors = [], []
+        for item in data:
+            card_id = item.get('id')
+            if not isinstance(card_id, int):
+                errors.append({'id': card_id, 'error': 'id must be an integer'})
+                continue
+            existing = conn.execute('SELECT * FROM cards WHERE id = ?', (card_id,)).fetchone()
+            if not existing:
+                errors.append({'id': card_id, 'error': 'Not found'})
+                continue
+            existing = dict(existing)
+            title = item.get('title', existing['title']).strip() or existing['title']
+            description = item.get('description', existing['description'])
+            status = item.get('status', existing['status'])
+            if status not in STATUSES:
+                status = existing['status']
+            priority = item.get('priority', existing['priority'])
+            if priority not in ('Low', 'Medium', 'High'):
+                priority = existing['priority']
+            position = item.get('position', existing['position'])
+            due_on = item.get('due_on', existing['due_on']) or None
+            delivered_on = item.get('delivered_on', existing['delivered_on']) or None
+            notes = item.get('notes', existing['notes'])
+            sprint_id = existing['sprint_id']
+            if 'sprint_id' in item:
+                new_sprint_id = int(item['sprint_id'])
+                if conn.execute('SELECT 1 FROM sprints WHERE id=?', (new_sprint_id,)).fetchone():
+                    sprint_id = new_sprint_id
+            conn.execute(
+                'UPDATE cards SET title=?, description=?, status=?, priority=?, position=?, due_on=?, delivered_on=?, notes=?, sprint_id=? WHERE id=?',
+                (title, description, status, priority, position, due_on, delivered_on, notes, sprint_id, card_id)
+            )
+            updated.append(dict(conn.execute('SELECT * FROM cards WHERE id = ?', (card_id,)).fetchone()))
+        conn.commit()
+        conn.close()
+        self.send_json({'updated': updated, 'errors': errors})
+
+    def handle_bulk_move_cards(self):
+        data = self.read_json()
+        card_ids = data.get('card_ids', [])
+        sprint_id = data.get('sprint_id')
+        if not isinstance(card_ids, list) or not card_ids:
+            self.send_json({'error': 'card_ids must be a non-empty array'}, 400)
+            return
+        if not isinstance(sprint_id, int):
+            self.send_json({'error': 'sprint_id must be an integer'}, 400)
+            return
+        if len(card_ids) > BULK_MAX:
+            self.send_json({'error': f'Too many items, max {BULK_MAX}'}, 413)
+            return
+        conn = get_db()
+        if not conn.execute('SELECT 1 FROM sprints WHERE id=?', (sprint_id,)).fetchone():
+            conn.close()
+            self.send_json({'error': 'Sprint not found'}, 404)
+            return
+        placeholders = ','.join('?' * len(card_ids))
+        conn.execute(
+            f'UPDATE cards SET sprint_id=? WHERE id IN ({placeholders})',
+            [sprint_id] + list(card_ids)
+        )
+        moved = conn.execute(
+            f'SELECT COUNT(*) FROM cards WHERE sprint_id=? AND id IN ({placeholders})',
+            [sprint_id] + list(card_ids)
+        ).fetchone()[0]
+        conn.commit()
+        conn.close()
+        self.send_json({'moved': moved, 'requested': len(card_ids)})
+
+    def handle_bulk_create_dependencies(self):
+        data = self.read_json()
+        if not isinstance(data, list):
+            self.send_json({'error': 'Expected a JSON array'}, 400)
+            return
+        if len(data) > BULK_MAX:
+            self.send_json({'error': f'Too many items, max {BULK_MAX}'}, 413)
+            return
+        conn = get_db()
+        created, skipped = 0, []
+        for item in data:
+            card_id = item.get('card_id')
+            depends_on = item.get('depends_on')
+            if not isinstance(card_id, int) or not isinstance(depends_on, int):
+                skipped.append({**item, 'reason': 'card_id and depends_on must be integers'})
+                continue
+            if card_id == depends_on:
+                skipped.append({**item, 'reason': 'a card cannot depend on itself'})
+                continue
+            if has_path(conn, depends_on, card_id):
+                skipped.append({**item, 'reason': 'would create a cycle'})
+                continue
+            conn.execute(
+                'INSERT OR IGNORE INTO card_dependencies (card_id, depends_on) VALUES (?,?)',
+                (card_id, depends_on)
+            )
+            created += 1
+        conn.commit()
+        conn.close()
+        self.send_json({'created': created, 'skipped': skipped}, 201 if created else 200)
 
 
 def find_open_port(start):
