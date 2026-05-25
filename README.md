@@ -322,7 +322,7 @@ The logs show the exact error. The two most common causes are a wrong path in th
 `test_mcp.py` acts as an MCP client over stdio and exercises all major tool categories end-to-end. Requires the kanban server to be running.
 
 ```bash
-uvx 'mcp[cli]' run test_mcp.py
+uv run test_mcp.py
 ```
 
 Seed the database first if it is empty:
