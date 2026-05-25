@@ -19,16 +19,35 @@ The optional MCP server (`mcp_server.py`) additionally requires:
 
 ## Running
 
+### Web app only
+
 ```bash
 python3 app.py           # starts on port 8000
 python3 app.py 9000      # starts on a specific port
 ```
 
-Open the printed URL in your browser. The SQLite database (`kanban.db`) is created automatically on first run if it doesn't exist.
+Open the printed URL in your browser. The SQLite database (`kanban.db`) is created automatically on first run. If the requested port is already in use the server increments until it finds a free one and prints the actual URL.
 
-If the requested port is already in use, the server automatically increments until it finds a free one and prints the actual URL it bound to.
+To stop: `Ctrl+C`.
 
-To stop the server: `Ctrl+C`.
+### Web app + MCP server
+
+The MCP server is a separate process that proxies tool calls to the web app's HTTP API. Both must be running for agents to use the tools.
+
+**Terminal 1** — web app:
+```bash
+python3 app.py 8000
+```
+
+**Terminal 2** — MCP server:
+```bash
+uv run mcp_server.py                              # connects to http://localhost:8000 (default)
+KANBAN_URL=http://localhost:9000 uv run mcp_server.py  # if the web app is on a different port
+```
+
+`uv` installs the `mcp` dependency automatically on first run — no `pip install` or venv setup needed.
+
+The MCP server communicates over stdio and is intended to be spawned by an MCP client (Claude Desktop, the `claude` CLI, etc.). Running it directly in a terminal is only useful for verifying it starts without error; it will sit silently waiting for JSON-RPC input.
 
 ---
 
@@ -319,17 +338,24 @@ The logs show the exact error. The two most common causes are a wrong path in th
 
 #### Option A — programmatic smoke test (no browser, no npm)
 
-`test_mcp.py` acts as an MCP client over stdio and exercises all major tool categories end-to-end. Requires the kanban server to be running.
+`test_mcp.py` acts as an MCP client over stdio and exercises all major tool categories end-to-end: tool listing, sprint/card CRUD, bulk updates, and cycle detection.
+
+Start the web app and seed the database first:
 
 ```bash
-uv run test_mcp.py
-```
-
-Seed the database first if it is empty:
-
-```bash
+python3 app.py 8000
 python3 seed.py
 ```
+
+Then run the test, pointing it at whichever port the web app is on:
+
+```bash
+KANBAN_URL=http://localhost:8000 uv run test_mcp.py
+```
+
+`KANBAN_URL` must be set explicitly here because `test_mcp.py` spawns `mcp_server.py` as a subprocess and explicitly forwards the environment to it. Without it the subprocess falls back to `http://localhost:8000`, and if the web app shifted to another port (e.g. 8001 because 8000 was in use), every tool call fails silently with a connection error rather than a clear message.
+
+**A note on FastMCP list serialisation:** tools that return a Python list (e.g. `list_sprints`, `list_cards`) produce one `TextContent` item per element in `result.content`, not a single JSON array blob. `test_mcp.py` accounts for this via `_parse_list()`. If you write your own MCP client against this server, use `[json.loads(item.text) for item in result.content]` for list-returning tools and `json.loads(result.content[0].text)` for tools that return a single object.
 
 #### Option B — interactive browser inspector
 
@@ -337,7 +363,7 @@ python3 seed.py
 uvx 'mcp[cli]' dev mcp_server.py
 ```
 
-Opens a browser-based UI at `http://localhost:6274` where you can browse tool schemas and call them with custom inputs.
+Opens a browser-based UI at `http://localhost:6274` where you can browse tool schemas and call them with custom inputs. The web app must be running separately.
 
 **Important:** the command is `uvx 'mcp[cli]' dev`, not `uv run mcp dev`. The difference matters:
 
