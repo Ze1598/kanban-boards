@@ -437,7 +437,7 @@ sqlite3 -json kanban.db "SELECT * FROM cards;" > cards_export.json
 
 ## Seeding Dummy Data
 
-`seed.py` populates the database with 3 sprints, 14 cards, and 10 dependency relationships. Due dates are computed relative to the date the script is run, so the Gantt chart always shows a realistic rolling window. The script wipes all existing data before inserting, so re-running it always produces a clean state.
+`seed.py` populates the database with 3 sprints, 16 cards, and 19 dependency relationships. Due dates are computed relative to the date the script is run so all cards always fall within a ~25-day window and appear in the Gantt chart on any run date. The script wipes all existing data before inserting, so re-running it always produces a clean state.
 
 ```bash
 python3 seed.py
@@ -448,3 +448,42 @@ For a full reset from scratch:
 ```bash
 rm kanban.db && python3 seed.py
 ```
+
+### Dummy dataset — Project Manager Web App
+
+#### Sprint 1 — Foundation
+
+| # | Card | Status | Depends On |
+|---|------|--------|------------|
+| 1 | Initialize repo and set up project structure | Done | — |
+| 2 | Configure database schema (projects, tasks, users) | Done | #1 |
+| 3 | Implement user authentication (sign up / login) | In Progress | #2 |
+| 4 | Set up routing and navigation shell | In Progress | #1 |
+| 5 | Deploy dev environment | Backlog | #3, #4 |
+
+#### Sprint 2 — Core Features
+
+| # | Card | Status | Depends On |
+|---|------|--------|------------|
+| 6 | Create project CRUD (create, list, edit, delete) | In Progress | #5 |
+| 7 | Create task CRUD within projects | Backlog | #6 |
+| 8 | Build kanban board view for tasks | Backlog | #7 |
+| 9 | Add task status updates (To Do / In Progress / Done) | Backlog | #8 |
+| 10 | Implement user assignment to tasks | Backlog | #7 |
+| 11 | Add due date and priority fields to tasks | Backlog | #7 |
+
+#### Sprint 3 — Polish & Launch
+
+| # | Card | Status | Depends On |
+|---|------|--------|------------|
+| 12 | Build dashboard with project overview | Backlog | #9, #10, #11 |
+| 13 | Add search and filter for tasks | Backlog | #12 |
+| 14 | Write unit tests for core flows | Backlog | #12 |
+| 15 | UI/UX review and fixes | Backlog | #13 |
+| 16 | Deploy to production | Backlog | #14, #15 |
+
+#### Dependency chain
+
+`#1 → #2 → #3 → #5 → #6 → #7 → #8 → #9 → #12 → #13 → #14 → #15 → #16`
+
+Branches: **#4** feeds into #5 alongside #3. **#10** and **#11** both branch from #7 and converge at #12.
