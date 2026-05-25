@@ -9,14 +9,27 @@
 
 import asyncio
 import json
-import sys
+import os
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 
+def _parse_list(result) -> list:
+    """FastMCP expands list return values into one content item per element."""
+    return [json.loads(item.text) for item in result.content]
+
+
+def _parse_obj(result) -> dict:
+    return json.loads(result.content[0].text)
+
+
 async def main():
-    params = StdioServerParameters(command="uv", args=["run", "mcp_server.py"])
+    params = StdioServerParameters(
+        command="uv",
+        args=["run", "mcp_server.py"],
+        env=os.environ.copy(),
+    )
 
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -32,7 +45,7 @@ async def main():
 
             # list_sprints
             result = await session.call_tool("list_sprints", {})
-            sprints = json.loads(result.content[0].text)
+            sprints = _parse_list(result)
             print(f"✓ list_sprints → {len(sprints)} sprint(s)")
             if not sprints:
                 print("  No sprints found — seed the DB first: python seed.py")
@@ -44,7 +57,7 @@ async def main():
 
             # list_cards
             result = await session.call_tool("list_cards", {"sprint_id": sprint_id})
-            cards = json.loads(result.content[0].text)
+            cards = _parse_list(result)
             print(f"✓ list_cards → {len(cards)} card(s)")
 
             # create_card
@@ -54,7 +67,7 @@ async def main():
                 "status": "Backlog",
                 "priority": "Low",
             })
-            card = json.loads(result.content[0].text)
+            card = _parse_obj(result)
             card_id = card["id"]
             print(f"✓ create_card → id={card_id}")
 
@@ -64,19 +77,19 @@ async def main():
                 "due_on": "2025-09-01",
                 "priority": "High",
             })
-            updated = json.loads(result.content[0].text)
+            updated = _parse_obj(result)
             print(f"✓ update_card → due_on={updated['due_on']} priority={updated['priority']}")
 
             # bulk_update_cards (uses cards from the sprint)
             if len(cards) >= 2:
                 updates = [{"id": c["id"], "due_on": "2025-10-01"} for c in cards[:3]]
                 result = await session.call_tool("bulk_update_cards", {"updates": updates})
-                bulk = json.loads(result.content[0].text)
+                bulk = _parse_obj(result)
                 print(f"✓ bulk_update_cards → updated={len(bulk['updated'])} errors={len(bulk['errors'])}")
 
             # list_sprint_dependencies
             result = await session.call_tool("list_sprint_dependencies", {"sprint_id": sprint_id})
-            deps = json.loads(result.content[0].text)
+            deps = _parse_list(result)
             print(f"✓ list_sprint_dependencies → {len(deps)} edge(s)")
 
             # create_dependency (test card depends on first real card)
@@ -85,18 +98,18 @@ async def main():
                     "card_id": card_id,
                     "depends_on": cards[0]["id"],
                 })
-                print(f"✓ create_dependency → {json.loads(result.content[0].text)}")
+                print(f"✓ create_dependency → {_parse_obj(result)}")
 
                 # cycle detection: reverse should be skipped
                 result = await session.call_tool("bulk_create_dependencies", {
                     "dependencies": [{"card_id": cards[0]["id"], "depends_on": card_id}]
                 })
-                cycle = json.loads(result.content[0].text)
+                cycle = _parse_obj(result)
                 print(f"✓ bulk_create_dependencies cycle check → skipped={cycle['skipped']}")
 
             # delete test card
             result = await session.call_tool("delete_card", {"card_id": card_id})
-            print(f"✓ delete_card → {json.loads(result.content[0].text)}")
+            print(f"✓ delete_card → {_parse_obj(result)}")
 
             print("\nAll checks passed.")
 
