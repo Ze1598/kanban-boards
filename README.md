@@ -8,22 +8,46 @@ A lightweight, local-first kanban board web app. No framework, no package manage
 
 - Python 3.8+
 
-That's it.
+That's it — the web app has zero external dependencies.
+
+The optional MCP server (`mcp_server.py`) additionally requires:
+
+- Python 3.10+
+- [uv](https://docs.astral.sh/uv/) — dependencies are declared inline via PEP 723 and installed automatically on first run
 
 ---
 
 ## Running
+
+### Web app only
 
 ```bash
 python3 app.py           # starts on port 8000
 python3 app.py 9000      # starts on a specific port
 ```
 
-Open the printed URL in your browser. The SQLite database (`kanban.db`) is created automatically on first run if it doesn't exist.
+Open the printed URL in your browser. The SQLite database (`kanban.db`) is created automatically on first run. If the requested port is already in use the server increments until it finds a free one and prints the actual URL.
 
-If the requested port is already in use, the server automatically increments until it finds a free one and prints the actual URL it bound to.
+To stop: `Ctrl+C`.
 
-To stop the server: `Ctrl+C`.
+### Web app + MCP server
+
+The MCP server is a separate process that proxies tool calls to the web app's HTTP API. Both must be running for agents to use the tools.
+
+**Terminal 1** — web app:
+```bash
+python3 app.py 8000
+```
+
+**Terminal 2** — MCP server:
+```bash
+uv run mcp_server.py                              # connects to http://localhost:8000 (default)
+KANBAN_URL=http://localhost:9000 uv run mcp_server.py  # if the web app is on a different port
+```
+
+`uv` installs the `mcp` dependency automatically on first run — no `pip install` or venv setup needed.
+
+The MCP server communicates over stdio and is intended to be spawned by an MCP client (Claude Desktop, the `claude` CLI, etc.). Running it directly in a terminal is only useful for verifying it starts without error; it will sit silently waiting for JSON-RPC input.
 
 ---
 
@@ -32,9 +56,11 @@ To stop the server: `Ctrl+C`.
 ```
 kanban-boards/
 ├── app.py              # HTTP server, request routing, all API handlers, DB init
+├── mcp_server.py       # MCP server — exposes all API endpoints as agent-callable tools
+├── test_mcp.py         # MCP smoke-test client (no browser required)
 ├── migrate.py          # Schema migration script — safe to run on any existing DB
 ├── seed.py             # Populates the DB with dummy sprints and cards for testing
-├── kanban.db           # SQLite database (auto-created, gitignore this)
+├── kanban.db           # SQLite database (auto-created, not tracked in git)
 └── static/
     ├── index.html      # Single-page shell — markup only, no logic
     ├── style.css       # All styles
@@ -113,26 +139,49 @@ All connections use `row_factory = sqlite3.Row`, which allows columns to be acce
 
 All endpoints consume and produce `application/json`.
 
-| Method   | Path                              | Description                                                                 |
-|----------|-----------------------------------|-----------------------------------------------------------------------------|
-| `GET`    | `/api/sprints`                    | List all sprints, ordered by `created_at DESC`                              |
-| `POST`   | `/api/sprints`                    | Create a sprint `{ name }`                                                  |
-| `PUT`    | `/api/sprints/:id`                | Rename a sprint `{ name }`                                                  |
-| `DELETE` | `/api/sprints/:id`                | Delete sprint and all its cards                                             |
-| `GET`    | `/api/sprints/:id/cards`          | List cards for a sprint, ordered by `position, id`                          |
-| `POST`   | `/api/sprints/:id/cards`          | Create a card `{ title, description?, status?, priority?, due_on?, delivered_on?, notes? }` |
-| `PUT`    | `/api/cards/:id`                  | Update any card fields (edits and drag-and-drop status changes)             |
-| `DELETE` | `/api/cards/:id`                  | Delete a card                                                               |
-| `GET`    | `/api/sprints/:id/dependencies`   | List all dependency pairs `{ card_id, depends_on }` for a sprint            |
-| `GET`    | `/api/cards/:id/dependencies`     | Get predecessors and successors for a card `{ predecessors, successors }`   |
-| `POST`   | `/api/dependencies`               | Create a dependency `{ card_id, depends_on }` — rejects cycles (409)       |
-| `DELETE` | `/api/dependencies/:card_id/:depends_on` | Remove a specific dependency                                        |
+**Sprints**
 
-The `PUT /api/cards/:id` handler merges the incoming payload over the existing row — any fields not included retain their current values. This means both full edits (from the modal) and partial updates (drag-and-drop only sends `status`) go through the same endpoint.
+| Method   | Path                 | Body / notes                                       |
+|----------|----------------------|----------------------------------------------------|
+| `GET`    | `/api/sprints`       | List all sprints, ordered by `created_at DESC`     |
+| `POST`   | `/api/sprints`       | `{ name }`                                         |
+| `PUT`    | `/api/sprints/:id`   | `{ name }`                                         |
+| `DELETE` | `/api/sprints/:id`   | Cascades to all cards in the sprint                |
 
-Status values are validated against the canonical list on writes; invalid values fall back to the existing value (on update) or `Not Triaged` (on create). Same pattern for `priority`.
+**Cards**
 
-**Cycle detection:** Before inserting a dependency, the server runs a BFS from the proposed `depends_on` node following existing forward edges. If it reaches `card_id`, the new edge would form a cycle and the request is rejected with a 409.
+| Method   | Path                       | Body / notes                                                                 |
+|----------|----------------------------|------------------------------------------------------------------------------|
+| `GET`    | `/api/sprints/:id/cards`   | Ordered by `position, id`                                                    |
+| `POST`   | `/api/sprints/:id/cards`   | `{ title, description?, status?, priority?, due_on?, delivered_on?, notes? }` |
+| `PUT`    | `/api/cards/:id`           | Any subset of card fields — missing fields retain their current values. Pass `sprint_id` to move a card to a different sprint. |
+| `DELETE` | `/api/cards/:id`           | Removes all dependency rows involving this card                              |
+
+**Dependencies**
+
+| Method   | Path                                      | Body / notes                                              |
+|----------|-------------------------------------------|-----------------------------------------------------------|
+| `GET`    | `/api/sprints/:id/dependencies`           | Returns `[{ card_id, depends_on }]` for the sprint        |
+| `GET`    | `/api/cards/:id/dependencies`             | Returns `{ predecessors: [{id, title}], successors: [{id, title}] }` |
+| `POST`   | `/api/dependencies`                       | `{ card_id, depends_on }` — rejects self-loops and cycles (409) |
+| `DELETE` | `/api/dependencies/:card_id/:depends_on`  | Removes a single dependency edge                          |
+
+**Bulk operations**
+
+All bulk endpoints accept up to 50 items per request and return a 413 if the limit is exceeded. The MCP server handles chunking automatically for larger sets.
+
+| Method    | Path                        | Body / notes                                                                                   |
+|-----------|-----------------------------|-----------------------------------------------------------------------------------------------|
+| `PATCH`   | `/api/cards/bulk`           | `[{ id, ...fields }]` — updates each card, merging over existing values. Returns `{ updated: [...], errors: [{id, error}] }`. Failed items are reported in `errors`; the rest are still applied. |
+| `POST`    | `/api/cards/bulk-move`      | `{ card_ids: [int], sprint_id }` — moves all listed cards to the target sprint. Returns `{ moved, requested }`. |
+| `POST`    | `/api/dependencies/bulk`    | `[{ card_id, depends_on }]` — creates multiple dependency edges. Each edge is individually validated for self-loops and cycles; invalid ones go into `skipped` rather than aborting the batch. Returns `{ created, skipped: [{card_id, depends_on, reason}] }`. |
+
+**Validation rules:**
+- Status must be one of the eight canonical values; invalid values fall back to the existing value (on update) or `Not Triaged` (on create).
+- Priority must be `Low`, `Medium`, or `High`; invalid values fall back similarly.
+- Dates (`due_on`, `delivered_on`) are stored as ISO 8601 strings (`YYYY-MM-DD`) or `NULL`.
+
+**Cycle detection:** Before inserting a dependency, the server runs a BFS from the proposed `depends_on` node following existing forward edges. If it can reach `card_id`, the new edge would form a cycle and the request is rejected with 409. In bulk mode the failing edge is skipped and the batch continues.
 
 ### Frontend (`app.js`)
 
@@ -186,6 +235,143 @@ The card modal is dual-purpose: `editingCardId === null` means "create new", any
 **HTML escaping:**
 
 User-supplied strings inserted into the DOM via `innerHTML` are passed through `esc()`, which escapes `&`, `<`, `>`, and `"` to prevent XSS.
+
+---
+
+## MCP Server
+
+`mcp_server.py` exposes the full API as [Model Context Protocol](https://modelcontextprotocol.io) tools, allowing AI agents (Claude Desktop, the `claude` CLI, or any MCP-compatible client) to read and write the board conversationally.
+
+The MCP server is a **stdio server** — it is spawned as a subprocess by the MCP client and communicates over stdin/stdout. It does not listen on a port of its own. It proxies all tool calls to the kanban HTTP server, so that server must be running separately.
+
+### Configuration
+
+| Environment variable | Default                   | Purpose                                         |
+|----------------------|---------------------------|-------------------------------------------------|
+| `KANBAN_URL`         | `http://localhost:8000`   | Base URL of the running kanban server           |
+| `KANBAN_BULK_CHUNK`  | `50`                      | Max items per backend call for bulk tools       |
+
+### Claude Desktop setup
+
+**1. Find the absolute paths you will need:**
+
+```bash
+which uv           # e.g. /Users/you/.local/bin/uv
+pwd                # run from inside the kanban-boards directory
+```
+
+**2. Edit the Claude Desktop config file:**
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "kanban-boards": {
+      "command": "/Users/you/.local/bin/uv",
+      "args": ["run", "/Users/you/projects/kanban-boards/mcp_server.py"],
+      "env": {
+        "KANBAN_URL": "http://localhost:8000"
+      }
+    }
+  }
+}
+```
+
+**Both paths must be absolute.** Claude Desktop launches servers in a minimal environment that does not inherit your shell's `PATH`. If you write `"command": "uv"` it will fail with a connection error even though `uv` works fine in your terminal.
+
+**3. Start the kanban server** (Claude Desktop will not start it for you):
+
+```bash
+python3 app.py 8000
+```
+
+**4. Fully quit and relaunch Claude Desktop** — Cmd+Q on macOS, not just closing the window.
+
+**5. Verify the connection** — open a new conversation and look for the hammer icon near the message input. If it is missing, check the logs:
+
+```bash
+tail -f ~/Library/Logs/Claude/mcp*.log
+```
+
+The logs show the exact error. The two most common causes are a wrong path in the config (look for `No such file or directory`) and the kanban server not running (look for `Connection refused`).
+
+### Available tools
+
+**Sprint tools**
+
+| Tool             | What it does                              |
+|------------------|-------------------------------------------|
+| `list_sprints`   | List all sprints                          |
+| `create_sprint`  | Create a sprint                           |
+| `update_sprint`  | Rename a sprint                           |
+| `delete_sprint`  | Delete a sprint and all its cards         |
+
+**Card tools**
+
+| Tool           | What it does                                                            |
+|----------------|-------------------------------------------------------------------------|
+| `list_cards`   | List cards in a sprint                                                  |
+| `create_card`  | Create a card (title, status, priority, due date, etc.)                 |
+| `update_card`  | Update any card fields; pass `sprint_id` to move between sprints        |
+| `delete_card`  | Delete a card                                                           |
+
+**Dependency tools**
+
+| Tool                       | What it does                                               |
+|----------------------------|------------------------------------------------------------|
+| `list_sprint_dependencies` | List all dependency edges in a sprint                      |
+| `get_card_dependencies`    | Get predecessors and successors of a specific card         |
+| `create_dependency`        | Create a dependency between two cards                      |
+| `delete_dependency`        | Remove a dependency edge                                   |
+
+**Bulk tools** — accept lists of any size; the server chunks automatically
+
+| Tool                       | What it does                                                      |
+|----------------------------|-------------------------------------------------------------------|
+| `bulk_update_cards`        | Update multiple cards (e.g. set due dates, change status)         |
+| `bulk_move_cards`          | Move multiple cards to a different sprint                         |
+| `bulk_create_dependencies` | Create multiple dependency edges; cycles are skipped with reasons |
+
+### Testing locally
+
+#### Option A — programmatic smoke test (no browser, no npm)
+
+`test_mcp.py` acts as an MCP client over stdio and exercises all major tool categories end-to-end: tool listing, sprint/card CRUD, bulk updates, and cycle detection.
+
+Start the web app and seed the database first:
+
+```bash
+python3 app.py 8000
+python3 seed.py
+```
+
+Then run the test, pointing it at whichever port the web app is on:
+
+```bash
+KANBAN_URL=http://localhost:8000 uv run test_mcp.py
+```
+
+`KANBAN_URL` must be set explicitly here because `test_mcp.py` spawns `mcp_server.py` as a subprocess and explicitly forwards the environment to it. Without it the subprocess falls back to `http://localhost:8000`, and if the web app shifted to another port (e.g. 8001 because 8000 was in use), every tool call fails silently with a connection error rather than a clear message.
+
+**A note on FastMCP list serialisation:** tools that return a Python list (e.g. `list_sprints`, `list_cards`) produce one `TextContent` item per element in `result.content`, not a single JSON array blob. `test_mcp.py` accounts for this via `_parse_list()`. If you write your own MCP client against this server, use `[json.loads(item.text) for item in result.content]` for list-returning tools and `json.loads(result.content[0].text)` for tools that return a single object.
+
+#### Option B — interactive browser inspector
+
+```bash
+uvx 'mcp[cli]' dev mcp_server.py
+```
+
+Opens a browser-based UI at `http://localhost:6274` where you can browse tool schemas and call them with custom inputs. The web app must be running separately.
+
+**Important:** the command is `uvx 'mcp[cli]' dev`, not `uv run mcp dev`. The difference matters:
+
+- `uv run mcp dev` — tells uv to run a script or command called `mcp`, which is not on the PATH, and fails with `Failed to spawn: mcp`.
+- `uvx mcp dev` — finds the `mcp` CLI entry point but is missing the `typer` dependency, and fails with `typer is required. Install with 'pip install mcp[cli]'`.
+- `uvx 'mcp[cli]' dev` — installs `mcp` with its CLI extras (including `typer`) and runs correctly.
+
+The inspector's browser UI is powered by the `@modelcontextprotocol/inspector` npm package. On first run it will prompt `Ok to proceed? (y)` before downloading it. If you see an npm file conflict error, run `npm cache clean --force` and retry.
 
 ---
 
