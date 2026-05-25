@@ -223,21 +223,7 @@ User-supplied strings inserted into the DOM via `innerHTML` are passed through `
 
 `mcp_server.py` exposes the full API as [Model Context Protocol](https://modelcontextprotocol.io) tools, allowing AI agents (Claude Desktop, the `claude` CLI, or any MCP-compatible client) to read and write the board conversationally.
 
-### Running
-
-The kanban web server must be running first:
-
-```bash
-python3 app.py 8000
-```
-
-Then start the MCP server in a second terminal:
-
-```bash
-uv run mcp_server.py
-```
-
-`uv` installs the `mcp` dependency automatically on first run via the inline PEP 723 metadata — no `pip install` or venv needed.
+The MCP server is a **stdio server** — it is spawned as a subprocess by the MCP client and communicates over stdin/stdout. It does not listen on a port of its own. It proxies all tool calls to the kanban HTTP server, so that server must be running separately.
 
 ### Configuration
 
@@ -248,14 +234,24 @@ uv run mcp_server.py
 
 ### Claude Desktop setup
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+**1. Find the absolute paths you will need:**
+
+```bash
+which uv           # e.g. /Users/you/.local/bin/uv
+pwd                # run from inside the kanban-boards directory
+```
+
+**2. Edit the Claude Desktop config file:**
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "kanban-boards": {
-      "command": "/absolute/path/to/uv",
-      "args": ["run", "/absolute/path/to/kanban-boards/mcp_server.py"],
+      "command": "/Users/you/.local/bin/uv",
+      "args": ["run", "/Users/you/projects/kanban-boards/mcp_server.py"],
       "env": {
         "KANBAN_URL": "http://localhost:8000"
       }
@@ -264,13 +260,23 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 }
 ```
 
-Both paths must be **absolute**. Claude Desktop does not inherit your shell's `PATH`, so `uv` cannot be referenced by name alone — use `which uv` to find the full path. Fully quit and relaunch Claude Desktop after saving the file.
+**Both paths must be absolute.** Claude Desktop launches servers in a minimal environment that does not inherit your shell's `PATH`. If you write `"command": "uv"` it will fail with a connection error even though `uv` works fine in your terminal.
 
-To verify the connection, check the logs:
+**3. Start the kanban server** (Claude Desktop will not start it for you):
+
+```bash
+python3 app.py 8000
+```
+
+**4. Fully quit and relaunch Claude Desktop** — Cmd+Q on macOS, not just closing the window.
+
+**5. Verify the connection** — open a new conversation and look for the hammer icon near the message input. If it is missing, check the logs:
 
 ```bash
 tail -f ~/Library/Logs/Claude/mcp*.log
 ```
+
+The logs show the exact error. The two most common causes are a wrong path in the config (look for `No such file or directory`) and the kanban server not running (look for `Connection refused`).
 
 ### Available tools
 
@@ -301,7 +307,7 @@ tail -f ~/Library/Logs/Claude/mcp*.log
 | `create_dependency`        | Create a dependency between two cards                      |
 | `delete_dependency`        | Remove a dependency edge                                   |
 
-**Bulk tools** — accept lists of any size; chunking is handled automatically
+**Bulk tools** — accept lists of any size; the server chunks automatically
 
 | Tool                       | What it does                                                      |
 |----------------------------|-------------------------------------------------------------------|
@@ -309,27 +315,37 @@ tail -f ~/Library/Logs/Claude/mcp*.log
 | `bulk_move_cards`          | Move multiple cards to a different sprint                         |
 | `bulk_create_dependencies` | Create multiple dependency edges; cycles are skipped with reasons |
 
-### Testing without a browser
+### Testing locally
 
-`test_mcp.py` acts as an MCP client over stdio and exercises all major tool categories end-to-end:
+#### Option A — programmatic smoke test (no browser, no npm)
+
+`test_mcp.py` acts as an MCP client over stdio and exercises all major tool categories end-to-end. Requires the kanban server to be running.
 
 ```bash
 uvx 'mcp[cli]' run test_mcp.py
 ```
 
-Requires the kanban server to be running. Seed the database first if it is empty:
+Seed the database first if it is empty:
 
 ```bash
 python3 seed.py
 ```
 
-### Interactive inspector
+#### Option B — interactive browser inspector
 
 ```bash
 uvx 'mcp[cli]' dev mcp_server.py
 ```
 
 Opens a browser-based UI at `http://localhost:6274` where you can browse tool schemas and call them with custom inputs.
+
+**Important:** the command is `uvx 'mcp[cli]' dev`, not `uv run mcp dev`. The difference matters:
+
+- `uv run mcp dev` — tells uv to run a script or command called `mcp`, which is not on the PATH, and fails with `Failed to spawn: mcp`.
+- `uvx mcp dev` — finds the `mcp` CLI entry point but is missing the `typer` dependency, and fails with `typer is required. Install with 'pip install mcp[cli]'`.
+- `uvx 'mcp[cli]' dev` — installs `mcp` with its CLI extras (including `typer`) and runs correctly.
+
+The inspector's browser UI is powered by the `@modelcontextprotocol/inspector` npm package. On first run it will prompt `Ok to proceed? (y)` before downloading it. If you see an npm file conflict error, run `npm cache clean --force` and retry.
 
 ---
 
