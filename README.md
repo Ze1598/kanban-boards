@@ -8,7 +8,12 @@ A lightweight, local-first kanban board web app. No framework, no package manage
 
 - Python 3.8+
 
-That's it.
+That's it — the web app has zero external dependencies.
+
+The optional MCP server (`mcp_server.py`) additionally requires:
+
+- Python 3.10+
+- [uv](https://docs.astral.sh/uv/) — dependencies are declared inline via PEP 723 and installed automatically on first run
 
 ---
 
@@ -32,9 +37,11 @@ To stop the server: `Ctrl+C`.
 ```
 kanban-boards/
 ├── app.py              # HTTP server, request routing, all API handlers, DB init
+├── mcp_server.py       # MCP server — exposes all API endpoints as agent-callable tools
+├── test_mcp.py         # MCP smoke-test client (no browser required)
 ├── migrate.py          # Schema migration script — safe to run on any existing DB
 ├── seed.py             # Populates the DB with dummy sprints and cards for testing
-├── kanban.db           # SQLite database (auto-created, gitignore this)
+├── kanban.db           # SQLite database (auto-created, not tracked in git)
 └── static/
     ├── index.html      # Single-page shell — markup only, no logic
     ├── style.css       # All styles
@@ -113,26 +120,49 @@ All connections use `row_factory = sqlite3.Row`, which allows columns to be acce
 
 All endpoints consume and produce `application/json`.
 
-| Method   | Path                              | Description                                                                 |
-|----------|-----------------------------------|-----------------------------------------------------------------------------|
-| `GET`    | `/api/sprints`                    | List all sprints, ordered by `created_at DESC`                              |
-| `POST`   | `/api/sprints`                    | Create a sprint `{ name }`                                                  |
-| `PUT`    | `/api/sprints/:id`                | Rename a sprint `{ name }`                                                  |
-| `DELETE` | `/api/sprints/:id`                | Delete sprint and all its cards                                             |
-| `GET`    | `/api/sprints/:id/cards`          | List cards for a sprint, ordered by `position, id`                          |
-| `POST`   | `/api/sprints/:id/cards`          | Create a card `{ title, description?, status?, priority?, due_on?, delivered_on?, notes? }` |
-| `PUT`    | `/api/cards/:id`                  | Update any card fields (edits and drag-and-drop status changes)             |
-| `DELETE` | `/api/cards/:id`                  | Delete a card                                                               |
-| `GET`    | `/api/sprints/:id/dependencies`   | List all dependency pairs `{ card_id, depends_on }` for a sprint            |
-| `GET`    | `/api/cards/:id/dependencies`     | Get predecessors and successors for a card `{ predecessors, successors }`   |
-| `POST`   | `/api/dependencies`               | Create a dependency `{ card_id, depends_on }` — rejects cycles (409)       |
-| `DELETE` | `/api/dependencies/:card_id/:depends_on` | Remove a specific dependency                                        |
+**Sprints**
 
-The `PUT /api/cards/:id` handler merges the incoming payload over the existing row — any fields not included retain their current values. This means both full edits (from the modal) and partial updates (drag-and-drop only sends `status`) go through the same endpoint.
+| Method   | Path                 | Body / notes                                       |
+|----------|----------------------|----------------------------------------------------|
+| `GET`    | `/api/sprints`       | List all sprints, ordered by `created_at DESC`     |
+| `POST`   | `/api/sprints`       | `{ name }`                                         |
+| `PUT`    | `/api/sprints/:id`   | `{ name }`                                         |
+| `DELETE` | `/api/sprints/:id`   | Cascades to all cards in the sprint                |
 
-Status values are validated against the canonical list on writes; invalid values fall back to the existing value (on update) or `Not Triaged` (on create). Same pattern for `priority`.
+**Cards**
 
-**Cycle detection:** Before inserting a dependency, the server runs a BFS from the proposed `depends_on` node following existing forward edges. If it reaches `card_id`, the new edge would form a cycle and the request is rejected with a 409.
+| Method   | Path                       | Body / notes                                                                 |
+|----------|----------------------------|------------------------------------------------------------------------------|
+| `GET`    | `/api/sprints/:id/cards`   | Ordered by `position, id`                                                    |
+| `POST`   | `/api/sprints/:id/cards`   | `{ title, description?, status?, priority?, due_on?, delivered_on?, notes? }` |
+| `PUT`    | `/api/cards/:id`           | Any subset of card fields — missing fields retain their current values. Pass `sprint_id` to move a card to a different sprint. |
+| `DELETE` | `/api/cards/:id`           | Removes all dependency rows involving this card                              |
+
+**Dependencies**
+
+| Method   | Path                                      | Body / notes                                              |
+|----------|-------------------------------------------|-----------------------------------------------------------|
+| `GET`    | `/api/sprints/:id/dependencies`           | Returns `[{ card_id, depends_on }]` for the sprint        |
+| `GET`    | `/api/cards/:id/dependencies`             | Returns `{ predecessors: [{id, title}], successors: [{id, title}] }` |
+| `POST`   | `/api/dependencies`                       | `{ card_id, depends_on }` — rejects self-loops and cycles (409) |
+| `DELETE` | `/api/dependencies/:card_id/:depends_on`  | Removes a single dependency edge                          |
+
+**Bulk operations**
+
+All bulk endpoints accept up to 50 items per request and return a 413 if the limit is exceeded. The MCP server handles chunking automatically for larger sets.
+
+| Method    | Path                        | Body / notes                                                                                   |
+|-----------|-----------------------------|-----------------------------------------------------------------------------------------------|
+| `PATCH`   | `/api/cards/bulk`           | `[{ id, ...fields }]` — updates each card, merging over existing values. Returns `{ updated: [...], errors: [{id, error}] }`. Failed items are reported in `errors`; the rest are still applied. |
+| `POST`    | `/api/cards/bulk-move`      | `{ card_ids: [int], sprint_id }` — moves all listed cards to the target sprint. Returns `{ moved, requested }`. |
+| `POST`    | `/api/dependencies/bulk`    | `[{ card_id, depends_on }]` — creates multiple dependency edges. Each edge is individually validated for self-loops and cycles; invalid ones go into `skipped` rather than aborting the batch. Returns `{ created, skipped: [{card_id, depends_on, reason}] }`. |
+
+**Validation rules:**
+- Status must be one of the eight canonical values; invalid values fall back to the existing value (on update) or `Not Triaged` (on create).
+- Priority must be `Low`, `Medium`, or `High`; invalid values fall back similarly.
+- Dates (`due_on`, `delivered_on`) are stored as ISO 8601 strings (`YYYY-MM-DD`) or `NULL`.
+
+**Cycle detection:** Before inserting a dependency, the server runs a BFS from the proposed `depends_on` node following existing forward edges. If it can reach `card_id`, the new edge would form a cycle and the request is rejected with 409. In bulk mode the failing edge is skipped and the batch continues.
 
 ### Frontend (`app.js`)
 
@@ -186,6 +216,120 @@ The card modal is dual-purpose: `editingCardId === null` means "create new", any
 **HTML escaping:**
 
 User-supplied strings inserted into the DOM via `innerHTML` are passed through `esc()`, which escapes `&`, `<`, `>`, and `"` to prevent XSS.
+
+---
+
+## MCP Server
+
+`mcp_server.py` exposes the full API as [Model Context Protocol](https://modelcontextprotocol.io) tools, allowing AI agents (Claude Desktop, the `claude` CLI, or any MCP-compatible client) to read and write the board conversationally.
+
+### Running
+
+The kanban web server must be running first:
+
+```bash
+python3 app.py 8000
+```
+
+Then start the MCP server in a second terminal:
+
+```bash
+uv run mcp_server.py
+```
+
+`uv` installs the `mcp` dependency automatically on first run via the inline PEP 723 metadata — no `pip install` or venv needed.
+
+### Configuration
+
+| Environment variable | Default                   | Purpose                                         |
+|----------------------|---------------------------|-------------------------------------------------|
+| `KANBAN_URL`         | `http://localhost:8000`   | Base URL of the running kanban server           |
+| `KANBAN_BULK_CHUNK`  | `50`                      | Max items per backend call for bulk tools       |
+
+### Claude Desktop setup
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "kanban-boards": {
+      "command": "/absolute/path/to/uv",
+      "args": ["run", "/absolute/path/to/kanban-boards/mcp_server.py"],
+      "env": {
+        "KANBAN_URL": "http://localhost:8000"
+      }
+    }
+  }
+}
+```
+
+Both paths must be **absolute**. Claude Desktop does not inherit your shell's `PATH`, so `uv` cannot be referenced by name alone — use `which uv` to find the full path. Fully quit and relaunch Claude Desktop after saving the file.
+
+To verify the connection, check the logs:
+
+```bash
+tail -f ~/Library/Logs/Claude/mcp*.log
+```
+
+### Available tools
+
+**Sprint tools**
+
+| Tool             | What it does                              |
+|------------------|-------------------------------------------|
+| `list_sprints`   | List all sprints                          |
+| `create_sprint`  | Create a sprint                           |
+| `update_sprint`  | Rename a sprint                           |
+| `delete_sprint`  | Delete a sprint and all its cards         |
+
+**Card tools**
+
+| Tool           | What it does                                                            |
+|----------------|-------------------------------------------------------------------------|
+| `list_cards`   | List cards in a sprint                                                  |
+| `create_card`  | Create a card (title, status, priority, due date, etc.)                 |
+| `update_card`  | Update any card fields; pass `sprint_id` to move between sprints        |
+| `delete_card`  | Delete a card                                                           |
+
+**Dependency tools**
+
+| Tool                       | What it does                                               |
+|----------------------------|------------------------------------------------------------|
+| `list_sprint_dependencies` | List all dependency edges in a sprint                      |
+| `get_card_dependencies`    | Get predecessors and successors of a specific card         |
+| `create_dependency`        | Create a dependency between two cards                      |
+| `delete_dependency`        | Remove a dependency edge                                   |
+
+**Bulk tools** — accept lists of any size; chunking is handled automatically
+
+| Tool                       | What it does                                                      |
+|----------------------------|-------------------------------------------------------------------|
+| `bulk_update_cards`        | Update multiple cards (e.g. set due dates, change status)         |
+| `bulk_move_cards`          | Move multiple cards to a different sprint                         |
+| `bulk_create_dependencies` | Create multiple dependency edges; cycles are skipped with reasons |
+
+### Testing without a browser
+
+`test_mcp.py` acts as an MCP client over stdio and exercises all major tool categories end-to-end:
+
+```bash
+uvx 'mcp[cli]' run test_mcp.py
+```
+
+Requires the kanban server to be running. Seed the database first if it is empty:
+
+```bash
+python3 seed.py
+```
+
+### Interactive inspector
+
+```bash
+uvx 'mcp[cli]' dev mcp_server.py
+```
+
+Opens a browser-based UI at `http://localhost:6274` where you can browse tool schemas and call them with custom inputs.
 
 ---
 
