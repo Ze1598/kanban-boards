@@ -51,33 +51,36 @@ conn.execute('DELETE FROM cards')
 conn.execute('DELETE FROM sprints')
 
 conn.executemany('INSERT INTO sprints (id, name) VALUES (?,?)', [
-    (1, 'Sprint 11'),
-    (2, 'Sprint 12'),
-    (3, 'Sprint 13'),
+    (1, 'Sprint 1 — Foundation'),
+    (2, 'Sprint 2 — Core Features'),
+    (3, 'Sprint 3 — Polish & Launch'),
 ])
 
 # Cards — IDs are explicit so dependencies below can reference them reliably
+# Due dates are relative to today so all cards appear in the Gantt window
 # (sprint_id, title, description, status, priority, position, due_on, delivered_on, notes)
 cards = [
-    # ── Sprint 11 ── (completed, wrapped up ~2-3 weeks ago)
-    (1, 1,  'Define component library tokens',    'Establish spacing, colour, and typography tokens in a shared config file.',                          'Done',          'High',   1, rel(-20), rel(-21), ''),
-    (2, 1,  'Redesign user profile page',          'Update layout to match the new token-based design system. Needs mobile breakpoints.',                'Done',          'High',   2, rel(-14), rel(-15), 'Merged. Minor spacing tweak requested by design post-review — deferred to Sprint 12.'),
-    (3, 1,  'Add loading skeleton to dashboard',   'Replace spinner with skeleton screens for the three main widgets.',                                  'Done',          'Medium', 3, rel(-14), rel(-13), 'Delivered one day late due to a Safari CSS bug. Fix was a fallback animation via keyframes.'),
-    (4, 1,  'Fix broken pagination on feed',       'Items 21–30 return a 500. Likely an off-by-one in the SQL offset.',                                 'Done',          'High',   4, rel(-14), rel(-14), ''),
-    (5, 1,  'Audit npm dependencies for CVEs',     '',                                                                                                  'Needs Review',  'Low',    1, rel(-7),  None,      'Found 2 moderate CVEs in dev dependencies only. Not exploitable in prod. Awaiting sign-off.'),
+    # ── Sprint 1 — Foundation ──
+    (1, 1,  'Initialize repo and set up project structure',      '', 'Done',        'High',   1, rel(1),  rel(1),  ''),
+    (2, 1,  'Configure database schema (projects, tasks, users)','', 'Done',        'High',   2, rel(2),  rel(2),  ''),
+    (3, 1,  'Implement user authentication (sign up / login)',   '', 'In Progress', 'High',   1, rel(4),  None,    ''),
+    (4, 1,  'Set up routing and navigation shell',               '', 'In Progress', 'Medium', 2, rel(4),  None,    ''),
+    (5, 1,  'Deploy dev environment',                            '', 'Backlog',     'Medium', 1, rel(5),  None,    ''),
 
-    # ── Sprint 12 ── (active, mid-sprint)
-    (6, 2,  'Harden CSP headers',                  'Set Content-Security-Policy, X-Frame-Options, and Referrer-Policy on all responses.',                'Done',          'High',   1, rel(-7),  rel(-8),  ''),
-    (7, 2,  'Migrate auth tokens to httpOnly cookies', 'Current localStorage approach flagged in security review. Depends on CSP being locked down first. See ticket SEC-88.', 'In Progress', 'High', 2, rel(-1),  None, 'Blocked on backend cookie domain config. Need to align with infra on sameSite policy before proceeding.'),
-    (8, 2,  'Write auth integration tests',         'Cover login, logout, and token refresh flows against the new httpOnly cookie implementation.',      'Backlog',       'High',   3, rel(5),   None,      ''),
-    (9, 2,  'Build sprint reporting view',          'Bar chart of cards by status per sprint. Use canvas, no chart lib.',                                'In Progress',   'Medium', 1, rel(-1),  None,      ''),
-    (10, 2, 'Dark mode support',                    'Respect prefers-color-scheme. CSS custom properties are already in place — needs a theme toggle too.', 'Not Triaged', 'Low',  1, None,      None,      ''),
+    # ── Sprint 2 — Core Features ──
+    (6, 2,  'Create project CRUD (create, list, edit, delete)',  '', 'In Progress', 'High',   1, rel(9),  None,    ''),
+    (7, 2,  'Create task CRUD within projects',                  '', 'Backlog',     'High',   1, rel(11), None,    ''),
+    (8, 2,  'Build kanban board view for tasks',                 '', 'Backlog',     'High',   2, rel(12), None,    ''),
+    (9, 2,  'Add task status updates (To Do / In Progress / Done)','','Backlog',    'Medium', 3, rel(12), None,    ''),
+    (10, 2, 'Implement user assignment to tasks',                '', 'Backlog',     'Medium', 4, rel(15), None,    ''),
+    (11, 2, 'Add due date and priority fields to tasks',         '', 'Backlog',     'Low',    5, rel(15), None,    ''),
 
-    # ── Sprint 13 ── (planned, starting next week)
-    (11, 3, 'Public API v1 spec',                   'Write OpenAPI spec for the first public-facing endpoints. Auth and cards only for v1.',             'Backlog',       'High',   1, rel(10),  None,      ''),
-    (12, 3, 'Rate limiting middleware',              'Add per-IP rate limiting to all /api/* routes. Depends on CSP and auth work being stable.',        'Backlog',       'High',   2, rel(10),  None,      ''),
-    (13, 3, 'Export board to CSV',                  'Allow exporting all cards for a sprint as a CSV download from the reporting view.',                 'Backlog',       'Low',    1, rel(17),  None,      ''),
-    (14, 3, 'End-to-end test suite',                'Playwright tests covering the golden path: create sprint, add cards, drag across columns.',         'Not Triaged',   'Medium', 1, None,      None,      ''),
+    # ── Sprint 3 — Polish & Launch ──
+    (12, 3, 'Build dashboard with project overview',             '', 'Backlog',     'High',   1, rel(17), None,    ''),
+    (13, 3, 'Add search and filter for tasks',                   '', 'Backlog',     'Medium', 2, rel(19), None,    ''),
+    (14, 3, 'Write unit tests for core flows',                   '', 'Backlog',     'Medium', 3, rel(21), None,    ''),
+    (15, 3, 'UI/UX review and fixes',                            '', 'Backlog',     'Medium', 4, rel(23), None,    ''),
+    (16, 3, 'Deploy to production',                              '', 'Backlog',     'High',   5, rel(25), None,    ''),
 ]
 
 conn.executemany(
@@ -87,19 +90,28 @@ conn.executemany(
     cards
 )
 
-# Dependencies — (card_id depends_on predecessor_id)
+# Dependencies — (card_id, depends_on)
 # Read as: "card_id cannot start until depends_on is done"
 dependencies = [
-    (2,  1),   # Redesign profile page        → needs component tokens first
-    (3,  2),   # Loading skeleton              → needs redesigned profile page
-    (7,  6),   # Migrate auth to httpOnly      → needs CSP headers hardened
-    (8,  7),   # Auth integration tests        → needs httpOnly migration done
-    (12, 7),   # Rate limiting middleware       → needs auth migration stable
-    (12, 6),   # Rate limiting middleware       → also needs CSP hardened
-    (11, 8),   # Public API v1 spec            → needs auth tests passing
-    (13, 9),   # Export to CSV                 → needs reporting view built
-    (14, 8),   # E2E test suite                → needs auth integration tests
-    (14, 13),  # E2E test suite                → needs CSV export to exist
+    (2,  1),   # Configure schema          → needs repo initialised
+    (3,  2),   # User auth                 → needs schema configured
+    (4,  1),   # Routing shell             → needs repo initialised
+    (5,  3),   # Deploy dev env            → needs auth implemented
+    (5,  4),   # Deploy dev env            → needs routing shell in place
+    (6,  5),   # Project CRUD              → needs dev env deployed
+    (7,  6),   # Task CRUD                 → needs project CRUD
+    (8,  7),   # Kanban board view         → needs task CRUD
+    (9,  8),   # Task status updates       → needs kanban board
+    (10, 7),   # User assignment           → needs task CRUD
+    (11, 7),   # Due date & priority fields→ needs task CRUD
+    (12, 9),   # Dashboard                 → needs task status updates
+    (12, 10),  # Dashboard                 → needs user assignment
+    (12, 11),  # Dashboard                 → needs due date fields
+    (13, 12),  # Search & filter           → needs dashboard
+    (14, 12),  # Unit tests                → needs dashboard
+    (15, 13),  # UI/UX review              → needs search & filter
+    (16, 14),  # Deploy to production      → needs unit tests
+    (16, 15),  # Deploy to production      → needs UI/UX sign-off
 ]
 
 conn.executemany(
@@ -109,4 +121,4 @@ conn.executemany(
 
 conn.commit()
 conn.close()
-print('Seeded: 3 sprints, 14 cards, 10 dependencies.')
+print('Seeded: 3 sprints, 16 cards, 19 dependencies.')
